@@ -41,7 +41,7 @@ import time
 from typing import Dict, List, Any, Optional
 from aiohttp import web
 
-TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "index.html")
+TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "PRNCODEX", "index.html")
 
 EXP_TABLE: Dict[int, int] = {
     1: 0, 2: 48, 3: 202, 4: 544, 5: 1012, 6: 1844, 7: 2792, 8: 3800,

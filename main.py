@@ -58,13 +58,18 @@ except Exception:
     _CLAN_PB_AVAILABLE = False
 
 # ==================== CONFIG ====================
-WEB_HOST = "0.0.0.0"
-WEB_PORT = 25567
-ACCOUNTS_FILE = "accounts.json"
-TOKEN_CACHE_FILE = "token_cache.json"
-DEVICES_FILE = "devices.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+WEB_HOST = os.getenv("HOST", "0.0.0.0")
+try:
+    WEB_PORT = int(os.getenv("PORT", "25567"))
+except (TypeError, ValueError):
+    WEB_PORT = 25567
+
+ACCOUNTS_FILE = os.path.join(BASE_DIR, "accounts.json")
+TOKEN_CACHE_FILE = os.path.join(BASE_DIR, "token_cache.json")
+DEVICES_FILE = os.path.join(BASE_DIR, "devices.json")
 TOKEN_CACHE_TTL = 1200
-INDEX_HTML_PATH = "PRNCODEX/index.html"
+INDEX_HTML_PATH = os.path.join(BASE_DIR, "PRNCODEX", "index.html")
 
 START_MATCH_INTERVAL = 3.0
 NEW_MATCH_DELAY = 2.0
@@ -3133,7 +3138,12 @@ async def account_loop_token(token):
     except Exception as e:
         print_error(f"TOKEN {e}")
 
-async def start_web_server():
+def create_app() -> aiohttp.web.Application:
+    """Create the aiohttp application used by both Gunicorn and local runs.
+
+    Keeping the application object at module scope is important for Render/Gunicorn:
+    `main:app` must resolve without starting the bot during module import.
+    """
     app = aiohttp.web.Application(middlewares=[_req_logger])
     app.router.add_get("/", serve_index)
     app.router.add_get("/index.html", serve_index)
@@ -3149,41 +3159,86 @@ async def start_web_server():
     app.router.add_post("/api/account/pause_all", api_account_pause_all)
     app.router.add_post("/api/logs/clear", api_logs_clear)
     app.router.add_get("/api/progress", api_progress)
+    return app
+
+
+_background_tasks: list = []
+
+
+async def _app_startup(app: aiohttp.web.Application) -> None:
+    """Start non-blocking bot/background work after the HTTP server is ready."""
+    global _background_tasks
+    _background_tasks = []
+
+    try:
+        # This only schedules account workers; it does not wait for their
+        # network/game loops to finish, so web startup remains responsive.
+        await _autoload_accounts()
+    except Exception as e:
+        print_error(f"[BOOT] autoload failed: {e}")
+
+    try:
+        _background_tasks.append(asyncio.create_task(_no_match_watchdog()))
+    except Exception as e:
+        print_error(f"[BOOT] watchdog failed: {e}")
+
+    print_premium("PRN CODEX · Premium · All Systems Online",
+                  color=PX.EMERALD, icon=I["rocket"], tag="BOOT")
+
+
+async def _app_cleanup(app: aiohttp.web.Application) -> None:
+    """Stop account workers and close shared HTTP resources on shutdown."""
+    global _background_tasks
+
+    tasks = list(_background_tasks)
+    _background_tasks = []
+    for task in tasks:
+        if task and not task.done():
+            task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    workers = list(bot_state.account_workers.values())
+    bot_state.account_workers.clear()
+    for task in workers:
+        if task and not task.done():
+            task.cancel()
+    if workers:
+        await asyncio.gather(*workers, return_exceptions=True)
+
+    try:
+        await client.aclose()
+    except Exception:
+        pass
+
+
+# Module-level WSGI/ASGI-style entry point for Render/Gunicorn.
+# aiohttp is ASGI-like but is normally served by Gunicorn's aiohttp worker.
+app = create_app()
+app.on_startup.append(_app_startup)
+app.on_cleanup.append(_app_cleanup)
+
+
+# Backwards-compatible helper for code that previously called start_web_server().
+async def start_web_server():
+    """Run the module-level app using aiohttp's native runner.
+
+    Render should use Gunicorn with aiohttp.GunicornWebWorker instead.
+    """
     runner = aiohttp.web.AppRunner(app)
     await runner.setup()
     site = aiohttp.web.TCPSite(runner, WEB_HOST, WEB_PORT)
     await site.start()
-    print_premium(f"Web Dashboard → http://localhost:{WEB_PORT}",
+    print_premium(f"Web Dashboard → http://{WEB_HOST}:{WEB_PORT}",
                   color=PX.CYAN, icon=I["rocket"], tag="WEB")
     return runner
 
-# ==================== MAIN ====================
-async def main():
-    print_banner()
-    try:
-        await start_web_server()
-    except Exception as e:
-        print_error(f"WEB {e}"); return
-    try:
-        await _autoload_accounts()
-    except Exception as e:
-        print_error(f"BOOT autoload failed: {e}")
-    asyncio.create_task(_no_match_watchdog())
-    print_rule("PRN CODEX · Premium · All Systems Online", color=PX.EMERALD)
-    try:
-        while True:
-            await asyncio.sleep(1)
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        print_warning("Shutting down...")
-        for t in list(bot_state.account_workers.values()):
-            t.cancel()
-        await asyncio.gather(*bot_state.account_workers.values(), return_exceptions=True)
-        try: await client.aclose()
-        except Exception: pass
 
+# ==================== MAIN ====================
 if __name__ == "__main__":
+    # Local/Termux execution. Render uses the Gunicorn command below.
     try:
-        asyncio.run(main())
+        aiohttp.web.run_app(app, host=WEB_HOST, port=WEB_PORT)
     except KeyboardInterrupt:
         print_warning("stopped")
 

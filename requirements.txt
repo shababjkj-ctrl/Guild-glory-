@@ -1,9 +1,8 @@
-httpx
-google-play-scraper
-pycryptodome
-protobuf-decoder
-protobuf
-requests
-aiohttp
-gunicorn
-flask
+aiohttp>=3.10,<4
+gunicorn>=23,<24
+httpx>=0.27,<1
+google-play-scraper>=1.2.4
+pycryptodome>=3.20,<4
+protobuf-decoder==0.4.0
+protobuf>=4.25.1,<8
+requests>=2.31,<3

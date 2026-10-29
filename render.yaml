@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: guild-glory
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn main:app --bind 0.0.0.0:$PORT --worker-class aiohttp.GunicornWebWorker --workers 1 --timeout 0
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.10
